@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Data
+.data/
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# Environment (never commit secrets)
+.env
+.env*.local
+
+# Misc
+.DS_Store
+*.log
