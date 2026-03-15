@@ -19,7 +19,6 @@
     "incremental": true,
     "types": [
       "next",
-      "next/image-types",
       "next-auth"
     ],
     "paths": {
