@@ -11,10 +11,11 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, account, profile }) {
       if (account && profile) {
-        token.discordId = (profile as any).id;
-        token.name = profile.global_name ?? profile.name ?? token.name;
-        token.picture = profile.avatar
-          ? `https://cdn.discordapp.com/avatars/${(profile as any).id}/${(profile as any).avatar}.png`
+        const p = profile as { id?: string; name?: string; global_name?: string; avatar?: string };
+        token.discordId = p.id;
+        token.name = p.global_name ?? p.name ?? token.name;
+        token.picture = p.avatar
+          ? `https://cdn.discordapp.com/avatars/${p.id}/${p.avatar}.png`
           : token.picture;
       }
       return token;
