@@ -86,7 +86,7 @@ export default function HomePage() {
     const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
     const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
     let pusher: Pusher | null = null;
-    let channel: Pusher.Channel | null = null;
+    let channel: any = null;
 
     if (pusherKey && pusherCluster) {
       pusher = new Pusher(pusherKey, { cluster: pusherCluster });
