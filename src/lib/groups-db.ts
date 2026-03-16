@@ -231,7 +231,7 @@ export async function leaveGroup(
 ): Promise<Group | "not_found" | "not_member" | "creator_cannot_leave"> {
   const group = await prisma.group.findUnique({
     where: { id: groupId },
-    include: { members: true }
+    include: { members: true, applications: true }
   });
   if (!group) return "not_found";
   const member = group.members.find((m) => m.discordId === discordId);
@@ -242,7 +242,7 @@ export async function leaveGroup(
   });
   const updated = await prisma.group.findUnique({
     where: { id: groupId },
-    include: { members: true }
+    include: { members: true, applications: true }
   });
   return updated ? toGroup(updated) : "not_found";
 }
