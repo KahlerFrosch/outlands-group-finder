@@ -42,6 +42,6 @@ export default async function handler(
     });
   }
 
-  broadcastGroupsUpdated();
+  await broadcastGroupsUpdated();
   return res.status(200).json(result);
 }

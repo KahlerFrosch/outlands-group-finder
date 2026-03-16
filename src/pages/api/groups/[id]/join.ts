@@ -54,6 +54,6 @@ export default async function handler(
     return res.status(400).json({ error: "Already a member" });
   }
 
-  broadcastGroupsUpdated();
+  await broadcastGroupsUpdated();
   return res.status(200).json(result);
 }

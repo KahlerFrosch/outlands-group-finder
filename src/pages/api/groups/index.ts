@@ -108,7 +108,7 @@ export default async function handler(
       });
     }
 
-    broadcastGroupsUpdated();
+    await broadcastGroupsUpdated();
     return res.status(201).json(result);
   }
 
