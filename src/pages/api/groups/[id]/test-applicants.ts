@@ -55,8 +55,8 @@ export default async function handler(
       discordId: testDiscordId,
       name: safeName,
       role:
-        group.contentType === "Mentoring" && typeof role === "string" && MENTORING_ROLES.includes(role)
-          ? role
+        group.contentType === "Mentoring" && typeof role === "string"
+          ? (MENTORING_ROLES.find((r) => r === role) ?? null)
           : null
     }
   });
