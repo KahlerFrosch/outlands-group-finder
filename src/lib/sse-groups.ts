@@ -1,4 +1,5 @@
 import type { NextApiResponse } from "next";
+import { notifyGroupsUpdatedViaPusher } from "./pusher-server";
 
 // Use globalThis so the same Set is shared across all API route handlers
 // (Next.js may load route modules separately, so a module-level Set can be empty in delete/join/leave)
@@ -41,4 +42,8 @@ export function broadcastGroupsUpdated(): void {
       clients.delete(res);
     }
   });
+
+  // Also notify via Pusher so all serverless instances' clients can react
+  void notifyGroupsUpdatedViaPusher();
 }
+

@@ -53,6 +53,9 @@ Once the app works locally with Postgres:
    - `NEXTAUTH_URL` = `https://YOUR_PROJECT_URL` (the URL Vercel showed, e.g. `https://outlands-group-finder.vercel.app`).
    - `NEXTAUTH_SECRET` = same as local or a new one: `openssl rand -base64 32`.
    - `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET` = same as local.
+   - `PUSHER_APP_ID`, `PUSHER_KEY`, `PUSHER_SECRET`, `PUSHER_CLUSTER` = from your Pusher app.
+   - `NEXT_PUBLIC_PUSHER_KEY` = same as `PUSHER_KEY`.
+   - `NEXT_PUBLIC_PUSHER_CLUSTER` = same as `PUSHER_CLUSTER`.
 5. **Discord OAuth redirect:** In [Discord Developer Portal](https://discord.com/developers/applications) → your app → OAuth2 → Redirects, **add** (don’t remove localhost):
    - `https://YOUR_PROJECT_URL/api/auth/callback/discord`  
    (use the same URL as `NEXTAUTH_URL`, e.g. `https://outlands-group-finder.vercel.app/api/auth/callback/discord`).

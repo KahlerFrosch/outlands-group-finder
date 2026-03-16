@@ -4,6 +4,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import Pusher from "pusher-js";
 
 type ContentType = "PvM" | "PvP" | "Mentoring" | "Roleplay" | "Custom";
 
@@ -69,8 +70,10 @@ export default function HomePage() {
     };
   }, []);
 
-  // Real-time: SSE when supported (single-server), plus polling fallback for serverless (e.g. Vercel)
+  // Real-time: SSE when supported (single-server),
+  // Pusher for serverless (Vercel), plus polling fallback as a safety net
   useEffect(() => {
+    // SSE (mainly useful in local dev / single-instance hosting)
     const eventSource = new EventSource("/api/groups/stream");
     eventSource.onmessage = () => {
       refresh();
@@ -79,10 +82,30 @@ export default function HomePage() {
       eventSource.close();
     };
 
+    // Pusher (works across serverless instances)
+    const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
+    const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+    let pusher: Pusher | null = null;
+    let channel: Pusher.Channel | null = null;
+
+    if (pusherKey && pusherCluster) {
+      pusher = new Pusher(pusherKey, { cluster: pusherCluster });
+      channel = pusher.subscribe("groups");
+      channel.bind("updated", () => {
+        refresh();
+      });
+    }
+
+    // Polling fallback (ensures eventual consistency even if real-time fails)
     const pollInterval = setInterval(refresh, 25_000);
 
     return () => {
       eventSource.close();
+      if (channel && pusher) {
+        channel.unbind_all();
+        pusher.unsubscribe("groups");
+        pusher.disconnect();
+      }
       clearInterval(pollInterval);
     };
   }, []);
