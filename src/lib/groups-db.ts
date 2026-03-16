@@ -32,6 +32,12 @@ export type GroupMember = {
   role: string | null;
 };
 
+export type GroupApplicant = {
+  discordId: string;
+  name: string;
+  role: string | null;
+};
+
 export type Group = {
   id: string;
   contentType: ContentType;
@@ -39,10 +45,20 @@ export type Group = {
   contentTertiary: string | null;
   description: string;
   members: GroupMember[];
+  applicants: GroupApplicant[];
   createdAt: string;
 };
 
-function toGroup(rows: { id: string; contentType: string; contentSubType: string | null; contentTertiary: string | null; description: string; createdAt: Date; members: { discordId: string; name: string; isCreator: boolean; role: string | null }[] }): Group {
+function toGroup(rows: {
+  id: string;
+  contentType: string;
+  contentSubType: string | null;
+  contentTertiary: string | null;
+  description: string;
+  createdAt: Date;
+  members: { discordId: string; name: string; isCreator: boolean; role: string | null }[];
+  applications: { discordId: string; name: string; role: string | null }[];
+}): Group {
   return {
     id: rows.id,
     contentType: rows.contentType as ContentType,
@@ -55,13 +71,18 @@ function toGroup(rows: { id: string; contentType: string; contentSubType: string
       name: m.name,
       isCreator: m.isCreator,
       role: m.role ?? null
+    })),
+    applicants: rows.applications.map((a) => ({
+      discordId: a.discordId,
+      name: a.name,
+      role: a.role ?? null
     }))
   };
 }
 
 export async function getGroups(): Promise<Group[]> {
   const list = await prisma.group.findMany({
-    include: { members: true },
+    include: { members: true, applications: true },
     orderBy: { createdAt: "asc" }
   });
   return list.map(toGroup);
@@ -87,29 +108,37 @@ export async function createGroup(data: {
   if (await isUserInAnyGroup(data.creatorDiscordId)) {
     return "already_in_group";
   }
-  const created = await prisma.group.create({
-    data: {
-      contentType: data.contentType,
-      contentSubType: data.contentSubType,
-      contentTertiary: data.contentTertiary ?? null,
-      description: data.description,
-      members: {
-        create: [
-          {
-            discordId: data.creatorDiscordId,
-            name: data.creatorName,
-            isCreator: true,
-            role: data.creatorRole ?? null
-          }
-        ]
-      }
-    },
-    include: { members: true }
-  });
+  const [created] = await prisma.$transaction([
+    prisma.group.create({
+      data: {
+        contentType: data.contentType,
+        contentSubType: data.contentSubType,
+        contentTertiary: data.contentTertiary ?? null,
+        description: data.description,
+        members: {
+          create: [
+            {
+              discordId: data.creatorDiscordId,
+              name: data.creatorName,
+              isCreator: true,
+              role: data.creatorRole ?? null
+            }
+          ]
+        }
+      },
+      include: { members: true, applications: true }
+    }),
+    prisma.groupApplication.deleteMany({
+      where: { discordId: data.creatorDiscordId }
+    })
+  ]);
   return toGroup(created);
 }
 
-export async function deleteGroup(groupId: string, byDiscordId: string): Promise<"ok" | "not_found" | "forbidden"> {
+export async function deleteGroup(
+  groupId: string,
+  byDiscordId: string
+): Promise<"ok" | "not_found" | "forbidden"> {
   const group = await prisma.group.findUnique({
     where: { id: groupId },
     include: { members: true }
@@ -121,27 +150,77 @@ export async function deleteGroup(groupId: string, byDiscordId: string): Promise
   return "ok";
 }
 
-export async function joinGroup(
+/** Maximum number of groups a user can apply to at once. */
+const MAX_APPLICATIONS_PER_USER = 5;
+
+export async function getUserApplicationsCount(discordId: string): Promise<number> {
+  return prisma.groupApplication.count({
+    where: { discordId }
+  });
+}
+
+export async function applyToGroup(
   groupId: string,
   discordId: string,
   name: string,
   role?: string | null
-): Promise<Group | "not_found" | "already_member" | "already_in_group"> {
+): Promise<
+  | Group
+  | "not_found"
+  | "already_member"
+  | "already_in_group"
+  | "already_applied"
+  | "application_limit_reached"
+> {
   if (await isUserInAnyGroup(discordId)) {
     return "already_in_group";
   }
+
+  const existingCount = await getUserApplicationsCount(discordId);
+  if (existingCount >= MAX_APPLICATIONS_PER_USER) {
+    return "application_limit_reached";
+  }
+
   const group = await prisma.group.findUnique({
     where: { id: groupId },
-    include: { members: true }
+    include: { members: true, applications: true }
   });
   if (!group) return "not_found";
   if (group.members.some((m) => m.discordId === discordId)) return "already_member";
-  await prisma.groupMember.create({
-    data: { groupId, discordId, name, isCreator: false, role: role ?? null }
+  if (group.applications.some((a) => a.discordId === discordId)) return "already_applied";
+
+  await prisma.groupApplication.create({
+    data: { groupId, discordId, name, role: role ?? null }
   });
   const updated = await prisma.group.findUnique({
     where: { id: groupId },
-    include: { members: true }
+    include: { members: true, applications: true }
+  });
+  return updated ? toGroup(updated) : "not_found";
+}
+
+export async function withdrawApplication(
+  groupId: string,
+  discordId: string
+): Promise<Group | "not_found" | "no_application"> {
+  const group = await prisma.group.findUnique({
+    where: { id: groupId },
+    include: { members: true, applications: true }
+  });
+  if (!group) return "not_found";
+
+  const existing = group.applications.find((a) => a.discordId === discordId);
+  if (!existing) {
+    return "no_application";
+  }
+
+  await prisma.groupApplication.deleteMany({
+    where: { groupId, discordId }
+  });
+
+  const updated = await prisma.group.findUnique({
+    where: { id: groupId },
+    include: { members: true, applications: true }
   });
   return updated ? toGroup(updated) : "not_found";
 }

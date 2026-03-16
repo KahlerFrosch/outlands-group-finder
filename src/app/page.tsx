@@ -5,25 +5,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Pusher from "pusher-js";
-
-type ContentType = "PvM" | "PvP" | "Mentoring" | "Roleplay" | "Custom";
-
-type GroupMember = {
-  discordId: string;
-  name: string;
-  isCreator: boolean;
-  role: string | null;
-};
-
-type Group = {
-  id: string;
-  contentType: ContentType;
-  contentSubType: string | null;
-  contentTertiary: string | null;
-  description: string;
-  members: GroupMember[];
-  createdAt: string;
-};
+import type { Group } from "@/lib/groups-db";
 
 function loadGroups(): Promise<Group[]> {
   return fetch("/api/groups").then((res) => {
@@ -94,14 +76,17 @@ export default function HomePage() {
     };
   }, []);
 
-  const handleJoin = async (groupId: string, role?: string) => {
+  const handleApply = async (groupId: string, mode: "apply" | "withdraw", role?: string) => {
     if (!discordId) return;
     setActingId(groupId);
     try {
       const res = await fetch(`/api/groups/${groupId}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: role ? JSON.stringify({ role }) : undefined
+        body: JSON.stringify({
+          action: mode,
+          ...(role ? { role } : {})
+        })
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -169,6 +154,17 @@ export default function HomePage() {
     const isInAnyGroup = Boolean(
       discordId && groups.some((g) => g.members.some((m) => m.discordId === discordId))
     );
+    const isApplicant = Boolean(
+      discordId && group.applicants.some((a) => a.discordId === discordId)
+    );
+    const myApplicationsCount = discordId
+      ? groups.reduce(
+          (count, g) =>
+            count + g.applicants.filter((a) => a.discordId === discordId).length,
+          0
+        )
+      : 0;
+    const canApplyMore = !discordId || isApplicant || myApplicationsCount < 5;
     const busy = actingId === group.id;
 
     return (
@@ -222,6 +218,126 @@ export default function HomePage() {
             ))}
           </ul>
         </div>
+        {isLoggedIn && isMember && (group.applicants.length > 0 || isCreator) && (
+          <div className="mt-3 rounded-xl bg-slate-900/60 p-3">
+            <p className={`text-[11px] font-semibold uppercase tracking-wide ${highlighted ? "text-amber-300/80" : "text-slate-400"}`}>
+              Applicants ({group.applicants.length})
+            </p>
+            <ul className={`mt-1 flex flex-col gap-1 text-xs ${highlighted ? "text-amber-100/80" : "text-slate-300"}`}>
+              {group.applicants.map((a) => (
+                <li key={a.discordId} className="flex items-center justify-between gap-2 flex-wrap">
+                  <span>{a.name}</span>
+                  {group.contentType === "Mentoring" && a.role && (
+                    <span
+                      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${highlighted ? "bg-amber-500/30 text-amber-200" : "bg-slate-600/80 text-slate-200"}`}
+                    >
+                      {a.role}
+                    </span>
+                  )}
+                  {isCreator && (
+                    <span className="flex gap-1">
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={async () => {
+                          setActingId(group.id);
+                          try {
+                            const res = await fetch(`/api/groups/${group.id}/applications`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                applicantDiscordId: a.discordId,
+                                action: "accept"
+                              })
+                            });
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => ({}));
+                              throw new Error(data.error || "Failed to accept applicant");
+                            }
+                            refresh();
+                          } catch (err: any) {
+                            setError(err.message ?? "Failed to accept applicant");
+                            refresh();
+                          } finally {
+                            setActingId(null);
+                          }
+                        }}
+                        className="rounded-lg bg-emerald-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-400 disabled:opacity-60"
+                      >
+                        Accept
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={async () => {
+                          setActingId(group.id);
+                          try {
+                            const res = await fetch(`/api/groups/${group.id}/applications`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({
+                                applicantDiscordId: a.discordId,
+                                action: "decline"
+                              })
+                            });
+                            if (!res.ok) {
+                              const data = await res.json().catch(() => ({}));
+                              throw new Error(data.error || "Failed to decline applicant");
+                            }
+                            refresh();
+                          } catch (err: any) {
+                            setError(err.message ?? "Failed to decline applicant");
+                            refresh();
+                          } finally {
+                            setActingId(null);
+                          }
+                        }}
+                        className="rounded-lg bg-red-600/80 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-500 disabled:opacity-60"
+                      >
+                        Decline
+                      </button>
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {isCreator && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    setActingId(group.id);
+                    try {
+                      const res = await fetch(`/api/groups/${group.id}/test-applicants`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({})
+                      });
+                      if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        throw new Error(data.error || "Failed to add test applicant");
+                      }
+                      refresh();
+                    } catch (err: any) {
+                      setError(err.message ?? "Failed to add test applicant");
+                      refresh();
+                    } finally {
+                      setActingId(null);
+                    }
+                  }}
+                  className="inline-flex items-center rounded-lg bg-slate-800 px-2 py-1 font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-60"
+                >
+                  Add test applicant
+                </button>
+                <span className="text-slate-400">
+                  (testing only; creates a dummy applicant in this group)
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="mt-auto pt-3">
           {isLoggedIn ? (
             isCreator ? (
@@ -249,15 +365,28 @@ export default function HomePage() {
             ) : isInAnyGroup ? null : (
               <button
                 type="button"
-                disabled={busy}
-                onClick={() =>
-                  group.contentType === "Mentoring"
-                    ? (setJoinModalRole("Guide"), setJoinModalGroupId(group.id))
-                    : handleJoin(group.id)
+                disabled={busy || !canApplyMore}
+                onClick={() => {
+                  if (group.contentType === "Mentoring" && !isApplicant) {
+                    setJoinModalRole("Guide");
+                    setJoinModalGroupId(group.id);
+                  } else {
+                    handleApply(group.id, isApplicant ? "withdraw" : "apply");
+                  }
+                }}
+                className={
+                  isApplicant
+                    ? "inline-flex w-full items-center justify-center rounded-xl bg-fuchsia-600 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-fuchsia-500/40 transition hover:bg-fuchsia-500 disabled:opacity-60"
+                    : "inline-flex w-full items-center justify-center rounded-xl bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-indigo-500/40 transition group-hover:bg-indigo-400 disabled:opacity-60"
                 }
-                className="inline-flex w-full items-center justify-center rounded-xl bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-indigo-500/40 transition group-hover:bg-indigo-400 disabled:opacity-60"
               >
-                {busy ? "Joining…" : "Join"}
+                {busy
+                  ? isApplicant
+                    ? "Withdrawing…"
+                    : "Applying…"
+                  : isApplicant
+                    ? "Withdraw"
+                    : "Apply"}
               </button>
             )
           ) : null}
@@ -269,7 +398,7 @@ export default function HomePage() {
   const joinModalGroup = joinModalGroupId ? groups.find((g) => g.id === joinModalGroupId) : null;
   const onConfirmJoinWithRole = async () => {
     if (!joinModalGroupId) return;
-    await handleJoin(joinModalGroupId, joinModalRole);
+    await handleApply(joinModalGroupId, "apply", joinModalRole);
     setJoinModalGroupId(null);
   };
 
@@ -360,7 +489,7 @@ export default function HomePage() {
               onClick={onConfirmJoinWithRole}
               className="flex-1 rounded-xl bg-indigo-500 px-3 py-2 text-sm font-semibold text-white shadow shadow-indigo-500/40 transition hover:bg-indigo-400 disabled:opacity-60"
             >
-              {actingId === joinModalGroupId ? "Joining…" : "Join"}
+              {actingId === joinModalGroupId ? "Applying…" : "Apply"}
             </button>
             <button
               type="button"

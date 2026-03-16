@@ -91,6 +91,72 @@ async function main() {
   console.log("Cleared all groups from the database.");
 
   for (const g of PRESET_GROUPS) {
+    const extraMembers =
+      g.id === "preset-seed-001"
+        ? [
+            {
+              discordId: "preset-member-001-2",
+              name: "InfernoMage",
+              isCreator: false,
+              role: null
+            },
+            {
+              discordId: "preset-member-001-3",
+              name: "InfernoTank",
+              isCreator: false,
+              role: null
+            },
+            {
+              discordId: "preset-member-001-4",
+              name: "InfernoHealer",
+              isCreator: false,
+              role: null
+            },
+            {
+              discordId: "preset-member-001-5",
+              name: "InfernoRogue",
+              isCreator: false,
+              role: null
+            }
+          ]
+        : g.id === "preset-seed-003"
+          ? [
+              {
+                discordId: "preset-member-003-2",
+                name: "NewbieNina",
+                isCreator: false,
+                role: "Student"
+              },
+              {
+                discordId: "preset-member-003-3",
+                name: "LearnerLeo",
+                isCreator: false,
+                role: "Student"
+              }
+            ]
+          : g.id === "preset-seed-007"
+            ? [
+                {
+                  discordId: "preset-member-007-2",
+                  name: "ArenaMage",
+                  isCreator: false,
+                  role: null
+                },
+                {
+                  discordId: "preset-member-007-3",
+                  name: "ArenaTank",
+                  isCreator: false,
+                  role: null
+                },
+                {
+                  discordId: "preset-member-007-4",
+                  name: "ArenaHealer",
+                  isCreator: false,
+                  role: null
+                }
+              ]
+            : [];
+
     await prisma.group.create({
       data: {
         id: g.id,
@@ -105,7 +171,8 @@ async function main() {
               name: g.creatorName,
               isCreator: true,
               role: g.creatorRole ?? null
-            }
+            },
+            ...extraMembers
           ]
         }
       }

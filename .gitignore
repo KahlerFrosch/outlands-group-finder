@@ -6,7 +6,6 @@ node_modules/
 out/
 
 # Data
-.data/
 *.db
 *.db-journal
 prisma/*.db
