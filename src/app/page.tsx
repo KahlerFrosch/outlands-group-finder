@@ -69,7 +69,7 @@ export default function HomePage() {
     };
   }, []);
 
-  // Real-time: refetch when any user creates, deletes, joins, or leaves a group
+  // Real-time: SSE when supported (single-server), plus polling fallback for serverless (e.g. Vercel)
   useEffect(() => {
     const eventSource = new EventSource("/api/groups/stream");
     eventSource.onmessage = () => {
@@ -78,8 +78,12 @@ export default function HomePage() {
     eventSource.onerror = () => {
       eventSource.close();
     };
+
+    const pollInterval = setInterval(refresh, 25_000);
+
     return () => {
       eventSource.close();
+      clearInterval(pollInterval);
     };
   }, []);
 
