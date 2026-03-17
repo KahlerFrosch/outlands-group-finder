@@ -17,7 +17,7 @@ export default function HelpPage() {
         Alternatively, you may browse the list of available groups that other players have allready created and apply to join them. You can filter the list by group types. Again, some group types may require you to choose a role. You may only apply to up to 5 groups at a time.
       </p>
       <p className="text-sm text-slate-300 text-justify">
-        You can only ever be a member of one group at a time and if you are, you can't apply to other groups.
+        If your application to join a group is accepted, you will become a member of that group, clearing all other applications, you may had submitted. You can only ever be a member of one group at a time and while you are, you can't apply to join other groups.
       </p>
       <p className="text-sm text-slate-300 text-justify">
         As the creator of a group (indicated by the ♔ symbol), you can accept or decline applicants. You can also make the group temporarily unavailable, declining all current applicants and hiding it from the list of available groups. Groups will be deleted automatically after 1 hour of its creator's last interaction, indicated by a timer. Clicking the timer manually resets it.
