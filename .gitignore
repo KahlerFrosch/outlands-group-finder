@@ -13,7 +13,10 @@ prisma/*.db-journal
 
 # Environment (never commit secrets)
 .env
-.env*.local
+.env.local
+.env.local.example
+.env.production
+.env.production.example
 
 # Misc
 .DS_Store

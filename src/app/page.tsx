@@ -2,10 +2,16 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import Pusher from "pusher-js";
-import type { Group } from "@/lib/groups-db";
+import {
+  type Group,
+  type ContentType,
+  CONTENT_SUBTYPES,
+  PVM_TERTIARY_OPTIONS,
+  PVP_TERTIARY_OPTIONS
+} from "@/lib/groups-db";
 
 function loadGroups(): Promise<Group[]> {
   return fetch("/api/groups").then((res) => {
@@ -25,6 +31,12 @@ export default function HomePage() {
   const [actingId, setActingId] = useState<string | null>(null);
   const [joinModalGroupId, setJoinModalGroupId] = useState<string | null>(null);
   const [joinModalRole, setJoinModalRole] = useState<string>("Guide");
+  const [now, setNow] = useState<number>(Date.now());
+  const [autoDeletingId, setAutoDeletingId] = useState<string | null>(null);
+
+  const [filterContentType, setFilterContentType] = useState<ContentType | "All">("All");
+  const [filterSubType, setFilterSubType] = useState<string | "All">("All");
+  const [filterTertiary, setFilterTertiary] = useState<string | "All">("All");
 
   const refresh = () => {
     loadGroups()
@@ -52,6 +64,51 @@ export default function HomePage() {
     };
   }, []);
 
+  // Global ticking clock for expiry timers
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Automatically delete groups when the leader's timer runs out,
+  // so deletion behaves like other Pusher-driven updates.
+  useEffect(() => {
+    if (!discordId) return;
+
+    // Only attempt one auto-delete at a time.
+    if (autoDeletingId) return;
+
+    const leaderGroups = groups.filter((g) =>
+      g.members.some((m) => m.isCreator && m.discordId === discordId)
+    );
+
+    for (const g of leaderGroups) {
+      const expiresAtMs = new Date(g.expiresAt).getTime();
+      const remainingMs = expiresAtMs - now;
+      if (remainingMs <= 0) {
+        (async () => {
+          setAutoDeletingId(g.id);
+          try {
+            const res = await fetch(`/api/groups/${g.id}`, { method: "DELETE" });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              throw new Error(data.error || "Failed to delete group");
+            }
+            refresh();
+          } catch (err: any) {
+            setError(err.message ?? "Failed to delete group");
+            refresh();
+          } finally {
+            setAutoDeletingId(null);
+          }
+        })();
+        break;
+      }
+    }
+  }, [discordId, groups, now, autoDeletingId]);
+
   // Real-time: Pusher (works across serverless instances)
   useEffect(() => {
     const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
@@ -78,7 +135,7 @@ export default function HomePage() {
 
   const handleApply = async (groupId: string, mode: "apply" | "withdraw", role?: string) => {
     if (!discordId) return;
-    setActingId(groupId);
+    setActingId(`${groupId}:apply`);
     try {
       const res = await fetch(`/api/groups/${groupId}/join`, {
         method: "POST",
@@ -103,7 +160,7 @@ export default function HomePage() {
 
   const handleLeave = async (groupId: string) => {
     if (!discordId) return;
-    setActingId(groupId);
+    setActingId(`${groupId}:leave`);
     try {
       const res = await fetch(`/api/groups/${groupId}/leave`, { method: "POST" });
       if (!res.ok) {
@@ -121,7 +178,7 @@ export default function HomePage() {
 
   const handleDelete = async (groupId: string) => {
     if (!discordId) return;
-    setActingId(groupId);
+    setActingId(`${groupId}:delete`);
     try {
       const res = await fetch(`/api/groups/${groupId}`, { method: "DELETE" });
       if (!res.ok) {
@@ -140,9 +197,42 @@ export default function HomePage() {
   const myGroup = discordId
     ? groups.find((g) => g.members.some((m) => m.discordId === discordId))
     : null;
-  const availableGroups = myGroup
-    ? groups.filter((g) => g.id !== myGroup.id)
-    : groups;
+
+  const availableGroups = useMemo(() => {
+    const base = myGroup
+      ? groups.filter((g) => g.id !== myGroup.id && g.available)
+      : groups.filter((g) => g.available);
+
+    return base.filter((g) => {
+      if (filterContentType !== "All" && g.contentType !== filterContentType) {
+        return false;
+      }
+      if (filterSubType !== "All" && g.contentSubType !== filterSubType) {
+        return false;
+      }
+      if (filterTertiary !== "All" && g.contentTertiary !== filterTertiary) {
+        return false;
+      }
+      return true;
+    });
+  }, [groups, myGroup, filterContentType, filterSubType, filterTertiary]);
+
+  const availableSubTypes = useMemo(() => {
+    if (filterContentType === "PvM" || filterContentType === "PvP") {
+      return CONTENT_SUBTYPES[filterContentType] ?? [];
+    }
+    return [];
+  }, [filterContentType]);
+
+  const availableTertiaryOptions = useMemo(() => {
+    if (filterContentType === "PvM" && filterSubType !== "All") {
+      return PVM_TERTIARY_OPTIONS[filterSubType] ?? [];
+    }
+    if (filterContentType === "PvP" && filterSubType !== "All") {
+      return PVP_TERTIARY_OPTIONS[filterSubType] ?? [];
+    }
+    return [];
+  }, [filterContentType, filterSubType]);
 
   const renderGroupCard = (group: Group, highlighted: boolean) => {
     const isCreator = Boolean(
@@ -165,7 +255,22 @@ export default function HomePage() {
         )
       : 0;
     const canApplyMore = !discordId || isApplicant || myApplicationsCount < 5;
-    const busy = actingId === group.id;
+    const busy = (actingId?.startsWith(`${group.id}:`) ?? false) || autoDeletingId === group.id;
+    const showApplyActions = group.available;
+
+    const availabilityBusy = actingId === `${group.id}:availability`;
+    const deleteBusy = actingId === `${group.id}:delete` || autoDeletingId === group.id;
+    const leaveBusy = actingId === `${group.id}:leave`;
+    const applyBusy = actingId === `${group.id}:apply`;
+
+    const expiresAtMs = new Date(group.expiresAt).getTime();
+    const remainingMs = Math.max(0, expiresAtMs - now);
+    const remainingSeconds = Math.floor(remainingMs / 1000);
+    const minutes = Math.floor(remainingSeconds / 60);
+    const seconds = remainingSeconds % 60;
+    const formattedTimer = `${minutes.toString().padStart(2, "0")}:${seconds
+      .toString()
+      .padStart(2, "0")}`;
 
     return (
       <article
@@ -176,17 +281,60 @@ export default function HomePage() {
             : "group flex min-h-0 h-full flex-col rounded-2xl border border-white/10 bg-slate-900/60 p-4 transition hover:border-indigo-400/80 hover:bg-slate-900"
         }
       >
-        <h4 className="mb-2 text-sm font-semibold leading-tight">
-          {group.contentType === "Custom"
-            ? "Custom"
-            : group.contentType === "Roleplay" || group.contentType === "Mentoring"
-              ? group.contentType
-              : group.contentTertiary
-                ? `${group.contentType} · ${group.contentSubType} · ${group.contentTertiary}`
-                : group.contentSubType
-                  ? `${group.contentType} · ${group.contentSubType}`
-                  : `${group.contentType} group`}
-        </h4>
+        <div className="mb-2 flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {isMember && (
+              <span
+                className="inline-flex items-center text-xs font-semibold"
+                title={group.available ? "Available" : "Unavailable"}
+              >
+                <span aria-hidden="true" className="mr-1">
+                  {group.available ? "🔓" : "🔒"}
+                </span>
+              </span>
+            )}
+            <h4 className="text-sm font-semibold leading-tight">
+              {group.contentType === "Custom"
+                ? "Custom"
+                : group.contentType === "Roleplay" || group.contentType === "Mentoring"
+                  ? group.contentType
+                  : group.contentTertiary
+                    ? `${group.contentType} · ${group.contentSubType} · ${group.contentTertiary}`
+                    : group.contentSubType
+                      ? `${group.contentType} · ${group.contentSubType}`
+                      : `${group.contentType} group`}
+            </h4>
+          </div>
+          {isCreator && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setActingId(`${group.id}:timer`);
+                try {
+                  const res = await fetch(`/api/groups/${group.id}/heartbeat`, {
+                    method: "POST"
+                  });
+                  if (!res.ok) {
+                    const data = await res.json().catch(() => ({}));
+                    throw new Error(data.error || "Failed to reset timer");
+                  }
+                  refresh();
+                } catch (err: any) {
+                  setError(err.message ?? "Failed to reset timer");
+                  refresh();
+                } finally {
+                  setActingId(null);
+                }
+              }}
+              title="Group will be deleted if you don't interact with the group before this timer runs out. Click the timer to manually reset it."
+              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/30 px-2 py-0.5 text-[11px] font-mono text-slate-100 hover:border-indigo-400 hover:bg-black/50 disabled:opacity-60"
+            >
+              <span aria-hidden="true">🕒</span>
+              <span>{formattedTimer}</span>
+            </button>
+          )}
+        </div>
         <p
           className={`mb-2 h-[3lh] text-justify text-xs line-clamp-3 overflow-hidden ${group.description ? (highlighted ? "text-amber-100/90" : "text-slate-300") : (highlighted ? "text-amber-200/50" : "text-slate-500")}`}
         >
@@ -218,7 +366,7 @@ export default function HomePage() {
             ))}
           </ul>
         </div>
-        {isLoggedIn && isMember && (group.applicants.length > 0 || isCreator) && (
+        {isLoggedIn && isMember && group.applicants.length > 0 && (
           <div className="mt-3 rounded-xl bg-slate-900/60 p-3">
             <p className={`text-[11px] font-semibold uppercase tracking-wide ${highlighted ? "text-amber-300/80" : "text-slate-400"}`}>
               Applicants ({group.applicants.length})
@@ -236,11 +384,11 @@ export default function HomePage() {
                   )}
                   {isCreator && (
                     <span className="flex gap-1">
-                      <button
+                  <button
                         type="button"
                         disabled={busy}
                         onClick={async () => {
-                          setActingId(group.id);
+                          setActingId(`${group.id}:accept:${a.discordId}`);
                           try {
                             const res = await fetch(`/api/groups/${group.id}/applications`, {
                               method: "POST",
@@ -270,7 +418,7 @@ export default function HomePage() {
                         type="button"
                         disabled={busy}
                         onClick={async () => {
-                          setActingId(group.id);
+                          setActingId(`${group.id}:decline:${a.discordId}`);
                           try {
                             const res = await fetch(`/api/groups/${group.id}/applications`, {
                               method: "POST",
@@ -301,54 +449,53 @@ export default function HomePage() {
                 </li>
               ))}
             </ul>
-            {isCreator && (
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={async () => {
-                    setActingId(group.id);
-                    try {
-                      const res = await fetch(`/api/groups/${group.id}/test-applicants`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({})
-                      });
-                      if (!res.ok) {
-                        const data = await res.json().catch(() => ({}));
-                        throw new Error(data.error || "Failed to add test applicant");
-                      }
-                      refresh();
-                    } catch (err: any) {
-                      setError(err.message ?? "Failed to add test applicant");
-                      refresh();
-                    } finally {
-                      setActingId(null);
-                    }
-                  }}
-                  className="inline-flex items-center rounded-lg bg-slate-800 px-2 py-1 font-semibold text-slate-100 hover:bg-slate-700 disabled:opacity-60"
-                >
-                  Add test applicant
-                </button>
-                <span className="text-slate-400">
-                  (testing only; creates a dummy applicant in this group)
-                </span>
-              </div>
-            )}
           </div>
         )}
 
         <div className="mt-auto pt-3">
           {isLoggedIn ? (
             isCreator ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => handleDelete(group.id)}
-                className="inline-flex w-full items-center justify-center rounded-xl bg-red-600/80 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:opacity-60"
-              >
-                {busy ? "Deleting…" : "Delete group"}
-              </button>
+              <div className="flex flex-col gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    setActingId(`${group.id}:availability`);
+                    try {
+                      const res = await fetch(`/api/groups/${group.id}/availability`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ available: !group.available })
+                      });
+                      if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        throw new Error(data.error || "Failed to change availability");
+                      }
+                      refresh();
+                    } catch (err: any) {
+                      setError(err.message ?? "Failed to change availability");
+                      refresh();
+                    } finally {
+                      setActingId(null);
+                    }
+                  }}
+                  className={
+                    group.available
+                      ? "inline-flex w-full items-center justify-center rounded-xl bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600 disabled:opacity-60"
+                      : "inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60"
+                  }
+                >
+                  {availabilityBusy ? "Toggling availability…" : group.available ? "Make unavailable" : "Make available"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleDelete(group.id)}
+                  className="inline-flex w-full items-center justify-center rounded-xl bg-red-600/80 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:opacity-60"
+                >
+                  {deleteBusy ? "Deleting…" : "Delete group"}
+                </button>
+              </div>
             ) : isMember ? (
               <button
                 type="button"
@@ -360,9 +507,13 @@ export default function HomePage() {
                     : "inline-flex w-full items-center justify-center rounded-xl border border-slate-500 bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-700 disabled:opacity-60"
                 }
               >
-                {busy ? "Leaving…" : "Leave"}
+                {leaveBusy ? "Leaving…" : "Leave"}
               </button>
-            ) : isInAnyGroup ? null : (
+            ) : isInAnyGroup ? null : !showApplyActions ? (
+              <div className="text-xs text-slate-400">
+                Unavailable
+              </div>
+            ) : (
               <button
                 type="button"
                 disabled={busy || !canApplyMore}
@@ -380,7 +531,7 @@ export default function HomePage() {
                     : "inline-flex w-full items-center justify-center rounded-xl bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-indigo-500/40 transition group-hover:bg-indigo-400 disabled:opacity-60"
                 }
               >
-                {busy
+                {applyBusy
                   ? isApplicant
                     ? "Withdrawing…"
                     : "Applying…"
@@ -420,10 +571,62 @@ export default function HomePage() {
 
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div>
+          <div className="flex flex-col gap-1">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-slate-400">
               Available groups
             </h3>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+              <span className="font-semibold">Filter:</span>
+              <select
+                value={filterContentType}
+                onChange={(e) => {
+                  const value = e.target.value as ContentType | "All";
+                  setFilterContentType(value);
+                  setFilterSubType("All");
+                  setFilterTertiary("All");
+                }}
+                className="rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-xs outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
+              >
+                <option value="All">All categories</option>
+                <option value="PvM">PvM</option>
+                <option value="PvP">PvP</option>
+                <option value="Mentoring">Mentoring</option>
+                <option value="Roleplay">Roleplay</option>
+                <option value="Custom">Custom</option>
+              </select>
+              {(filterContentType === "PvM" || filterContentType === "PvP") && (
+                <select
+                  value={filterSubType}
+                  onChange={(e) => {
+                    const value = e.target.value as string | "All";
+                    setFilterSubType(value);
+                    setFilterTertiary("All");
+                  }}
+                  className="rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-xs outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
+                >
+                  <option value="All">All types</option>
+                  {availableSubTypes.map((sub) => (
+                    <option key={sub} value={sub}>
+                      {sub}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {availableTertiaryOptions.length > 0 && (
+                <select
+                  value={filterTertiary}
+                  onChange={(e) => setFilterTertiary(e.target.value as string | "All")}
+                  className="rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-xs outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
+                >
+                  <option value="All">All sub-types</option>
+                  {availableTertiaryOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           </div>
           {isLoggedIn && !myGroup && (
             <Link

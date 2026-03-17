@@ -44,9 +44,11 @@ export type Group = {
   contentSubType: string | null;
   contentTertiary: string | null;
   description: string;
+  available: boolean;
   members: GroupMember[];
   applicants: GroupApplicant[];
   createdAt: string;
+  expiresAt: string;
 };
 
 function toGroup(rows: {
@@ -55,7 +57,9 @@ function toGroup(rows: {
   contentSubType: string | null;
   contentTertiary: string | null;
   description: string;
+  available: boolean;
   createdAt: Date;
+  expiresAt: Date;
   members: { discordId: string; name: string; isCreator: boolean; role: string | null }[];
   applications: { discordId: string; name: string; role: string | null }[];
 }): Group {
@@ -65,7 +69,9 @@ function toGroup(rows: {
     contentSubType: rows.contentSubType,
     contentTertiary: rows.contentTertiary ?? null,
     description: rows.description,
+    available: rows.available,
     createdAt: rows.createdAt.toISOString(),
+    expiresAt: rows.expiresAt.toISOString(),
     members: rows.members.map((m) => ({
       discordId: m.discordId,
       name: m.name,
@@ -81,12 +87,33 @@ function toGroup(rows: {
 }
 
 export async function getGroups(): Promise<Group[]> {
+  // Clean up expired groups before returning the list
+  await prisma.group.deleteMany({
+    where: {
+      expiresAt: {
+        lt: new Date()
+      }
+    }
+  });
+
   const list = await prisma.group.findMany({
     include: { members: true, applications: true },
     orderBy: { createdAt: "asc" }
   });
   return list.map(toGroup);
 }
+// Group lifetime: 1 hour
+const GROUP_LIFETIME_MS = 60 * 60 * 1000;
+
+async function extendGroupLifetime(groupId: string): Promise<void> {
+  await prisma.group.update({
+    where: { id: groupId },
+    data: {
+      expiresAt: new Date(Date.now() + GROUP_LIFETIME_MS)
+    }
+  });
+}
+
 
 /** True if this user is already a member (or creator) of any group. */
 export async function isUserInAnyGroup(discordId: string): Promise<boolean> {
@@ -115,6 +142,7 @@ export async function createGroup(data: {
         contentSubType: data.contentSubType,
         contentTertiary: data.contentTertiary ?? null,
         description: data.description,
+        expiresAt: new Date(Date.now() + GROUP_LIFETIME_MS),
         members: {
           create: [
             {
@@ -186,6 +214,7 @@ export async function applyToGroup(
     include: { members: true, applications: true }
   });
   if (!group) return "not_found";
+  if (!group.available) return "not_found";
   if (group.members.some((m) => m.discordId === discordId)) return "already_member";
   if (group.applications.some((a) => a.discordId === discordId)) return "already_applied";
 
@@ -245,4 +274,38 @@ export async function leaveGroup(
     include: { members: true, applications: true }
   });
   return updated ? toGroup(updated) : "not_found";
+}
+
+export async function setGroupAvailability(
+  groupId: string,
+  byDiscordId: string,
+  available: boolean
+): Promise<"ok" | "not_found" | "forbidden"> {
+  const group = await prisma.group.findUnique({
+    where: { id: groupId },
+    include: { members: true }
+  });
+  if (!group) return "not_found";
+
+  const creator = group.members.find((m) => m.isCreator);
+  if (!creator || creator.discordId !== byDiscordId) return "forbidden";
+
+  await prisma.$transaction([
+    prisma.group.update({
+      where: { id: groupId },
+      data: {
+        available,
+        expiresAt: new Date(Date.now() + GROUP_LIFETIME_MS)
+      }
+    }),
+    ...(available
+      ? []
+      : [
+          prisma.groupApplication.deleteMany({
+            where: { groupId }
+          })
+        ])
+  ]);
+
+  return "ok";
 }

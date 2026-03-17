@@ -20,8 +20,13 @@ export default async function handler(
   res: NextApiResponse
 ) {
   if (req.method === "GET") {
-    const groups = await getGroups();
-    return res.status(200).json(groups);
+    try {
+      const groups = await getGroups();
+      return res.status(200).json(groups);
+    } catch (err) {
+      console.error("GET /api/groups failed:", err);
+      return res.status(500).json({ error: "Could not load groups. Please try again later." });
+    }
   }
 
   if (req.method === "POST") {

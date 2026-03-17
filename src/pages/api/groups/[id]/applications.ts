@@ -59,9 +59,17 @@ export default async function handler(
   }
 
   if (action === "decline") {
-    await prisma.groupApplication.deleteMany({
-      where: { groupId: id, discordId: applicantDiscordId }
-    });
+    await prisma.$transaction([
+      prisma.groupApplication.deleteMany({
+        where: { groupId: id, discordId: applicantDiscordId }
+      }),
+      prisma.group.update({
+        where: { id },
+        data: {
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000)
+        }
+      })
+    ]);
   } else if (action === "accept") {
     if (await isUserInAnyGroup(applicantDiscordId)) {
       return res.status(400).json({
@@ -86,6 +94,12 @@ export default async function handler(
         where: {
           discordId: applicantDiscordId,
           groupId: { not: id }
+        }
+      }),
+      prisma.group.update({
+        where: { id },
+        data: {
+          expiresAt: new Date(Date.now() + 60 * 60 * 1000)
         }
       })
     ]);

@@ -13,6 +13,8 @@ model Group {
   contentSubType  String?
   contentTertiary String?
   description     String        @default("") @db.Text
+  available       Boolean       @default(true)
+  expiresAt       DateTime
   createdAt       DateTime      @default(now())
   members         GroupMember[]
   applications    GroupApplication[]
