@@ -5,10 +5,21 @@ export const authOptions: NextAuthOptions = {
   providers: [
     DiscordProvider({
       clientId: process.env.DISCORD_CLIENT_ID ?? "",
-      clientSecret: process.env.DISCORD_CLIENT_SECRET ?? ""
+      clientSecret: process.env.DISCORD_CLIENT_SECRET ?? "",
+      authorization: {
+        params: {
+          scope: "identify email"
+        }
+      }
     })
   ],
   callbacks: {
+    async signIn({ account }) {
+      if (account?.provider !== "discord" || !account.access_token) {
+        return false;
+      }
+      return true;
+    },
     async jwt({ token, account, profile }) {
       if (account && profile) {
         const p = profile as { id?: string; name?: string; global_name?: string; avatar?: string };
@@ -24,7 +35,7 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.name = token.name;
         session.user.image = token.picture as string | undefined;
-        (session.user as any).discordId = token.discordId;
+        session.user.discordId = token.discordId;
       }
       return session;
     }

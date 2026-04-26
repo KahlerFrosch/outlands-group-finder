@@ -21,7 +21,7 @@ This is a very simple prototype for a web application where people can create gr
   - Secondary/tertiary options for PvM/PvP (dungeons, pit trials, treasure maps, proving grounds, etc.).
   - Description rules for Custom, Society Jobs, and Quests.
   - Role selection for Mentoring (Guide/Student).
-- Discord login via `next-auth`:
+- Discord login via `next-auth` (OAuth **application** only — client id/secret; no Discord bot):
   - JWT stores Discord ID, name, avatar.
   - Session exposes these to the frontend; group membership is tied to Discord ID.
 - PostgreSQL (via Prisma) with:

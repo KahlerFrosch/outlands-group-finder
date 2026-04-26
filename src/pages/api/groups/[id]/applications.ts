@@ -1,9 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { getSessionDiscordId } from "@/lib/api-session";
 import { prisma } from "@/lib/db";
-import { isUserInAnyGroup } from "@/lib/groups-db";
-import { broadcastGroupsUpdated } from "@/lib/sse-groups";
+import { getGroupForResponse, isUserInAnyGroup } from "@/lib/groups-db";
+import { broadcastGroupsUpdated } from "@/lib/groups-broadcast";
 
 export default async function handler(
   req: NextApiRequest,
@@ -14,19 +13,12 @@ export default async function handler(
     return res.status(405).end("Method Not Allowed");
   }
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
+  const currentDiscordId = await getSessionDiscordId(req, res);
+  if (!currentDiscordId) return;
 
   const { id } = req.query;
   if (typeof id !== "string") {
     return res.status(400).json({ error: "Invalid group id" });
-  }
-
-  const currentDiscordId = (session.user as any).discordId as string | undefined;
-  if (!currentDiscordId) {
-    return res.status(400).json({ error: "Discord ID missing" });
   }
 
   const { applicantDiscordId, action } = req.body ?? {};
@@ -42,6 +34,9 @@ export default async function handler(
     include: { members: true, applications: true }
   });
   if (!group) {
+    return res.status(404).json({ error: "Group not found" });
+  }
+  if (group.expiresAt < new Date()) {
     return res.status(404).json({ error: "Group not found" });
   }
 
@@ -87,7 +82,9 @@ export default async function handler(
           discordId: applicantDiscordId,
           name: application.name,
           isCreator: false,
-          role: application.role ?? null
+          role: application.role ?? null,
+          redlinePoints: application.redlinePoints ?? null,
+          chainLinkSlots: application.chainLinkSlots ?? null
         }
       }),
       prisma.groupApplication.deleteMany({
@@ -105,10 +102,10 @@ export default async function handler(
     ]);
   }
 
-  const updated = await prisma.group.findUnique({
-    where: { id },
-    include: { members: true, applications: true }
-  });
+  const updated = await getGroupForResponse(id);
+  if (!updated) {
+    return res.status(404).json({ error: "Group not found" });
+  }
 
   await broadcastGroupsUpdated();
   return res.status(200).json(updated);

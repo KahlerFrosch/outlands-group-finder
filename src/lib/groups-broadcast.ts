@@ -7,4 +7,3 @@ import { notifyGroupsUpdatedViaPusher } from "./pusher-server";
 export async function broadcastGroupsUpdated(): Promise<void> {
   await notifyGroupsUpdatedViaPusher();
 }
-

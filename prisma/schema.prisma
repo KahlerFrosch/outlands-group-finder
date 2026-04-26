@@ -8,26 +8,34 @@ datasource db {
 }
 
 model Group {
-  id              String        @id @default(cuid())
-  contentType     String
-  contentSubType  String?
-  contentTertiary String?
-  description     String        @default("") @db.Text
-  available       Boolean       @default(true)
-  expiresAt       DateTime
-  createdAt       DateTime      @default(now())
-  members         GroupMember[]
-  applications    GroupApplication[]
+  id                         String               @id @default(cuid())
+  categoryLevel1             String
+  categoryLevel2             String?
+  categoryLevel3             String?
+  description                String               @default("") @db.Text
+  available                  Boolean              @default(true)
+  requireRoleSelection Boolean                    @default(false)
+  requireRedlinePoints Boolean                    @default(false)
+  requireChainLinks Boolean                       @default(false)
+  voiceChannelListen         Boolean              @default(false)
+  voiceChannelSpeak          Boolean              @default(false)
+  expiresAt                  DateTime
+  createdAt                  DateTime             @default(now())
+  members                    GroupMember[]
+  applications               GroupApplication[]
+  chatMessages               GroupChatMessage[]
 }
 
 model GroupMember {
-  id        String   @id @default(cuid())
+  id        String  @id @default(cuid())
   groupId   String
-  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group     Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
   discordId String
   name      String
-  isCreator Boolean  @default(false)
+  isCreator Boolean @default(false)
   role      String?
+  redlinePoints   Int?
+  chainLinkSlots  Int?
 
   @@unique([groupId, discordId])
   @@index([groupId])
@@ -40,8 +48,22 @@ model GroupApplication {
   discordId String
   name      String
   role      String?
+  redlinePoints   Int?
+  chainLinkSlots  Int?
   createdAt DateTime @default(now())
 
   @@unique([groupId, discordId])
   @@index([groupId])
+}
+
+model GroupChatMessage {
+  id         String   @id @default(cuid())
+  groupId    String
+  group      Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  discordId  String
+  authorName String
+  body       String   @db.Text
+  createdAt  DateTime @default(now())
+
+  @@index([groupId, createdAt])
 }

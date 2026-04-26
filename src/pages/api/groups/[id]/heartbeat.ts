@@ -1,10 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { getSessionDiscordId } from "@/lib/api-session";
 import { prisma } from "@/lib/db";
-
-// Group lifetime: 1 hour
-const GROUP_LIFETIME_MS = 60 * 60 * 1000;
+import { resetGroupLifetimeIfLeader } from "@/lib/groups-db";
 
 export default async function handler(
   req: NextApiRequest,
@@ -15,15 +12,8 @@ export default async function handler(
     return res.status(405).end("Method Not Allowed");
   }
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  const discordId = (session.user as any).discordId as string | undefined;
-  if (!discordId) {
-    return res.status(400).json({ error: "Discord ID missing" });
-  }
+  const discordId = await getSessionDiscordId(req, res);
+  if (!discordId) return;
 
   const { id } = req.query;
   if (typeof id !== "string") {
@@ -32,26 +22,18 @@ export default async function handler(
 
   const group = await prisma.group.findUnique({
     where: { id },
-    include: { members: true }
+    select: { id: true }
   });
-
   if (!group) {
     return res.status(404).json({ error: "Group not found" });
   }
 
-  const me = group.members.find((m) => m.discordId === discordId);
-  if (!me || !me.isCreator) {
+  const ok = await resetGroupLifetimeIfLeader(id, discordId);
+  if (!ok) {
     return res.status(403).json({
       error: "Only the group leader can reset the timer"
     });
   }
-
-  await prisma.group.update({
-    where: { id },
-    data: {
-      expiresAt: new Date(Date.now() + GROUP_LIFETIME_MS)
-    }
-  });
 
   return res.status(200).json({ ok: true });
 }

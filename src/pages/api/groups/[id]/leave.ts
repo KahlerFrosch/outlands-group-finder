@@ -1,8 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { getSessionDiscordId } from "@/lib/api-session";
 import { leaveGroup } from "@/lib/groups-db";
-import { broadcastGroupsUpdated } from "@/lib/sse-groups";
+import { broadcastGroupsUpdated } from "@/lib/groups-broadcast";
 
 export default async function handler(
   req: NextApiRequest,
@@ -13,15 +12,8 @@ export default async function handler(
     return res.status(405).end("Method Not Allowed");
   }
 
-  const session = await getServerSession(req, res, authOptions);
-  if (!session?.user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  const discordId = (session.user as any).discordId as string | undefined;
-  if (!discordId) {
-    return res.status(400).json({ error: "Discord ID missing" });
-  }
+  const discordId = await getSessionDiscordId(req, res);
+  if (!discordId) return;
 
   const { id } = req.query;
   if (typeof id !== "string") {

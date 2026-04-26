@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ReactNode } from "react";
 import { AuthProvider } from "./providers";
+import { SiteFooter } from "../components/SiteFooter";
 import { UserStatus } from "../components/UserStatus";
 
 export const metadata: Metadata = {
@@ -12,6 +13,8 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  const discordServerUrl = process.env.NEXT_PUBLIC_DISCORD_SERVER_URL?.trim();
+
   return (
     <html lang="en">
       <body className="min-h-screen bg-slate-950 text-slate-50">
@@ -26,19 +29,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <UserStatus />
             </header>
             <main className="flex-1">{children}</main>
-            <footer className="mt-8 flex items-center justify-between border-t border-white/10 pt-4 text-xs text-slate-500">
-              <a
-                href="https://discord.com/users/229305790496768001"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:text-slate-300 hover:underline"
-              >
-                Report Bug / Feedback
-              </a>
-              <Link href="/help" className="hover:text-slate-300 hover:underline">
-                Instructions / Help
-              </Link>
-            </footer>
+            <SiteFooter discordServerUrl={discordServerUrl ?? null} />
           </div>
         </AuthProvider>
       </body>

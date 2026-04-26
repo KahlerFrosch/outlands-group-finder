@@ -1,68 +1,49 @@
-
 "use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
-import Pusher from "pusher-js";
 import {
   type Group,
-  type ContentType,
+  type CategoryLevel1,
+  type CategoryLevel2,
+  type CategoryLevel3,
   CONTENT_SUBTYPES,
+  QUEST_SUBTYPES,
   PVM_TERTIARY_OPTIONS,
-  PVP_TERTIARY_OPTIONS
-} from "@/lib/groups-db";
+  PVP_TERTIARY_OPTIONS,
+  MENTORING_ROLES,
+  PVM_APPLICANT_ROLES,
+  parseNonNegativeWholeNumberString,
+  isValidChainLinkSlotsValue,
+  maxChainLinkSlotsForRedline
+} from "@/lib/groups-shared";
+import { AdditionalInputRequiredModal } from "@/components/AdditionalInputRequiredModal";
+import { GroupCard } from "@/components/group-card/GroupCard";
+import { GroupChatWidget } from "@/components/GroupChatWidget";
+import { suppressJoinProgressionErrorMessage } from "@/lib/group-apply-helpers";
+import { useGroups } from "@/hooks/useGroups";
 
-function loadGroups(): Promise<Group[]> {
-  return fetch("/api/groups").then((res) => {
-    if (!res.ok) throw new Error("Failed to load groups");
-    return res.json();
-  });
-}
+/** Max height for Your group card + chat; content scrolls inside when taller. */
+const YOUR_GROUP_PANEL_MAX = "max-h-[min(33rem,67svh)]";
 
 export default function HomePage() {
   const { data: session } = useSession();
   const isLoggedIn = Boolean(session?.user);
-  const discordId = (session?.user as any)?.discordId as string | undefined;
+  const discordId = session?.user?.discordId;
 
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { groups, loading, error, setError, refresh } = useGroups();
   const [actingId, setActingId] = useState<string | null>(null);
   const [joinModalGroupId, setJoinModalGroupId] = useState<string | null>(null);
-  const [joinModalRole, setJoinModalRole] = useState<string>("Guide");
+  const [joinModalRole, setJoinModalRole] = useState<string>("");
+  const [joinModalRedlinePoints, setJoinModalRedlinePoints] = useState("");
+  const [joinModalChainLinkSlots, setJoinModalChainLinkSlots] = useState("");
   const [now, setNow] = useState<number>(Date.now());
   const [autoDeletingId, setAutoDeletingId] = useState<string | null>(null);
 
-  const [filterContentType, setFilterContentType] = useState<ContentType | "All">("All");
-  const [filterSubType, setFilterSubType] = useState<string | "All">("All");
-  const [filterTertiary, setFilterTertiary] = useState<string | "All">("All");
-
-  const refresh = () => {
-    loadGroups()
-      .then((data) => {
-        setGroups(data);
-        setError(null);
-      })
-      .catch(() => setError("Could not load groups. Please try again later."));
-  };
-
-  useEffect(() => {
-    let isMounted = true;
-    loadGroups()
-      .then((data) => {
-        if (isMounted) setGroups(data);
-      })
-      .catch(() => {
-        if (isMounted) setError("Could not load groups. Please try again later.");
-      })
-      .finally(() => {
-        if (isMounted) setLoading(false);
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  const [filterCategoryLevel1, setFilterCategoryLevel1] = useState<CategoryLevel1 | "All">("All");
+  const [filterCategoryLevel2, setFilterCategoryLevel2] = useState<CategoryLevel2 | "All">("All");
+  const [filterCategoryLevel3, setFilterCategoryLevel3] = useState<CategoryLevel3 | "All">("All");
 
   // Global ticking clock for expiry timers
   useEffect(() => {
@@ -109,32 +90,12 @@ export default function HomePage() {
     }
   }, [discordId, groups, now, autoDeletingId]);
 
-  // Real-time: Pusher (works across serverless instances)
-  useEffect(() => {
-    const pusherKey = process.env.NEXT_PUBLIC_PUSHER_KEY;
-    const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
-    let pusher: Pusher | null = null;
-    let channel: any = null;
-
-    if (pusherKey && pusherCluster) {
-      pusher = new Pusher(pusherKey, { cluster: pusherCluster });
-      channel = pusher.subscribe("groups");
-      channel.bind("updated", () => {
-        refresh();
-      });
-    }
-
-    return () => {
-      if (channel && pusher) {
-        channel.unbind_all();
-        pusher.unsubscribe("groups");
-        pusher.disconnect();
-      }
-    };
-  }, []);
-
-  const handleApply = async (groupId: string, mode: "apply" | "withdraw", role?: string) => {
-    if (!discordId) return;
+  const handleApply = async (
+    groupId: string,
+    mode: "apply" | "withdraw",
+    opts?: { role?: string; redlinePoints?: number; chainLinkSlots?: number }
+  ): Promise<boolean> => {
+    if (!discordId) return false;
     setActingId(`${groupId}:apply`);
     try {
       const res = await fetch(`/api/groups/${groupId}/join`, {
@@ -142,7 +103,9 @@ export default function HomePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: mode,
-          ...(role ? { role } : {})
+          ...(opts?.role ? { role: opts.role } : {}),
+          ...(opts?.redlinePoints !== undefined ? { redlinePoints: opts.redlinePoints } : {}),
+          ...(opts?.chainLinkSlots !== undefined ? { chainLinkSlots: opts.chainLinkSlots } : {})
         })
       });
       if (!res.ok) {
@@ -150,9 +113,13 @@ export default function HomePage() {
         throw new Error(data.error || "Failed to join");
       }
       refresh();
+      return true;
     } catch (err: any) {
-      setError(err.message ?? "Failed to join group");
-      refresh();
+      const msg = err.message ?? "Failed to join group";
+      if (!suppressJoinProgressionErrorMessage(msg)) {
+        setError(msg);
+      }
+      return false;
     } finally {
       setActingId(null);
     }
@@ -204,353 +171,149 @@ export default function HomePage() {
       : groups.filter((g) => g.available);
 
     return base.filter((g) => {
-      if (filterContentType !== "All" && g.contentType !== filterContentType) {
+      if (filterCategoryLevel1 !== "All" && g.categoryLevel1 !== filterCategoryLevel1) {
         return false;
       }
-      if (filterSubType !== "All" && g.contentSubType !== filterSubType) {
+      if (filterCategoryLevel2 !== "All" && g.categoryLevel2 !== filterCategoryLevel2) {
         return false;
       }
-      if (filterTertiary !== "All" && g.contentTertiary !== filterTertiary) {
+      if (filterCategoryLevel3 !== "All" && g.categoryLevel3 !== filterCategoryLevel3) {
         return false;
       }
       return true;
     });
-  }, [groups, myGroup, filterContentType, filterSubType, filterTertiary]);
+  }, [groups, myGroup, filterCategoryLevel1, filterCategoryLevel2, filterCategoryLevel3]);
 
   const availableSubTypes = useMemo(() => {
-    if (filterContentType === "PvM" || filterContentType === "PvP") {
-      return CONTENT_SUBTYPES[filterContentType] ?? [];
+    if (filterCategoryLevel1 === "Quests") {
+      return [...QUEST_SUBTYPES];
+    }
+    if (filterCategoryLevel1 === "PvM" || filterCategoryLevel1 === "PvP") {
+      return CONTENT_SUBTYPES[filterCategoryLevel1] ?? [];
     }
     return [];
-  }, [filterContentType]);
+  }, [filterCategoryLevel1]);
 
   const availableTertiaryOptions = useMemo(() => {
-    if (filterContentType === "PvM" && filterSubType !== "All") {
-      return PVM_TERTIARY_OPTIONS[filterSubType] ?? [];
+    if (filterCategoryLevel1 === "PvM" && filterCategoryLevel2 !== "All") {
+      return PVM_TERTIARY_OPTIONS[filterCategoryLevel2] ?? [];
     }
-    if (filterContentType === "PvP" && filterSubType !== "All") {
-      return PVP_TERTIARY_OPTIONS[filterSubType] ?? [];
+    if (filterCategoryLevel1 === "PvP" && filterCategoryLevel2 !== "All") {
+      return PVP_TERTIARY_OPTIONS[filterCategoryLevel2] ?? [];
     }
     return [];
-  }, [filterContentType, filterSubType]);
+  }, [filterCategoryLevel1, filterCategoryLevel2]);
 
-  const renderGroupCard = (group: Group, highlighted: boolean) => {
-    const isCreator = Boolean(
-      discordId && group.members.some((m) => m.isCreator && m.discordId === discordId)
-    );
-    const isMember = Boolean(
-      discordId && group.members.some((m) => m.discordId === discordId)
-    );
-    const isInAnyGroup = Boolean(
-      discordId && groups.some((g) => g.members.some((m) => m.discordId === discordId))
-    );
-    const isApplicant = Boolean(
-      discordId && group.applicants.some((a) => a.discordId === discordId)
-    );
-    const myApplicationsCount = discordId
-      ? groups.reduce(
-          (count, g) =>
-            count + g.applicants.filter((a) => a.discordId === discordId).length,
-          0
-        )
-      : 0;
-    const canApplyMore = !discordId || isApplicant || myApplicationsCount < 5;
-    const busy = (actingId?.startsWith(`${group.id}:`) ?? false) || autoDeletingId === group.id;
-    const showApplyActions = group.available;
-
-    const availabilityBusy = actingId === `${group.id}:availability`;
-    const deleteBusy = actingId === `${group.id}:delete` || autoDeletingId === group.id;
-    const leaveBusy = actingId === `${group.id}:leave`;
-    const applyBusy = actingId === `${group.id}:apply`;
-
-    const expiresAtMs = new Date(group.expiresAt).getTime();
-    const remainingMs = Math.max(0, expiresAtMs - now);
-    const remainingSeconds = Math.floor(remainingMs / 1000);
-    const minutes = Math.floor(remainingSeconds / 60);
-    const seconds = remainingSeconds % 60;
-    const formattedTimer = `${minutes.toString().padStart(2, "0")}:${seconds
-      .toString()
-      .padStart(2, "0")}`;
-
-    return (
-      <article
-        key={group.id}
-        className={
-          highlighted
-            ? "group flex min-h-0 flex-col rounded-2xl border-2 border-amber-400/70 bg-amber-950/40 p-4 shadow-lg shadow-amber-500/10 transition hover:border-amber-400 hover:bg-amber-950/50"
-            : "group flex min-h-0 h-full flex-col rounded-2xl border border-white/10 bg-slate-900/60 p-4 transition hover:border-indigo-400/80 hover:bg-slate-900"
-        }
-      >
-        <div className="mb-2 flex items-start justify-between gap-2">
-          <div className="flex items-center gap-2">
-            {isMember && (
-              <span
-                className="inline-flex items-center text-xs font-semibold"
-                title={group.available ? "Available" : "Unavailable"}
-              >
-                <span aria-hidden="true" className="mr-1">
-                  {group.available ? "🔓" : "🔒"}
-                </span>
-              </span>
-            )}
-            <h4 className="text-sm font-semibold leading-tight">
-              {group.contentType === "Custom"
-                ? "Custom"
-                : group.contentType === "Roleplay" || group.contentType === "Mentoring"
-                  ? group.contentType
-                  : group.contentTertiary
-                    ? `${group.contentType} · ${group.contentSubType} · ${group.contentTertiary}`
-                    : group.contentSubType
-                      ? `${group.contentType} · ${group.contentSubType}`
-                      : `${group.contentType} group`}
-            </h4>
-          </div>
-          {isCreator && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={async () => {
-                setActingId(`${group.id}:timer`);
-                try {
-                  const res = await fetch(`/api/groups/${group.id}/heartbeat`, {
-                    method: "POST"
-                  });
-                  if (!res.ok) {
-                    const data = await res.json().catch(() => ({}));
-                    throw new Error(data.error || "Failed to reset timer");
-                  }
-                  refresh();
-                } catch (err: any) {
-                  setError(err.message ?? "Failed to reset timer");
-                  refresh();
-                } finally {
-                  setActingId(null);
-                }
-              }}
-              title="Group will be deleted if you don't interact with the group before this timer runs out. Click the timer to manually reset it."
-              className="inline-flex items-center gap-1 rounded-full border border-white/10 bg-black/30 px-2 py-0.5 text-[11px] font-mono text-slate-100 hover:border-indigo-400 hover:bg-black/50 disabled:opacity-60"
-            >
-              <span aria-hidden="true">🕒</span>
-              <span>{formattedTimer}</span>
-            </button>
-          )}
-        </div>
-        <p
-          className={`mb-2 h-[3lh] text-justify text-xs line-clamp-3 overflow-hidden ${group.description ? (highlighted ? "text-amber-100/90" : "text-slate-300") : (highlighted ? "text-amber-200/50" : "text-slate-500")}`}
-        >
-          {group.description || "No description."}
-        </p>
-        <div className="mb-2">
-          <p className={`text-[11px] font-semibold uppercase tracking-wide ${highlighted ? "text-amber-300/80" : "text-slate-400"}`}>
-            Members ({group.members.length})
-          </p>
-          <ul className={`mt-1 flex flex-col gap-1 text-xs ${highlighted ? "text-amber-100/80" : "text-slate-300"}`}>
-            {[...group.members]
-              .sort((a, b) => Number(b.isCreator) - Number(a.isCreator))
-              .map((m) => (
-              <li key={m.discordId} className="flex items-center gap-1.5 flex-wrap">
-                {m.isCreator && (
-                  <span className="text-amber-400" title="Group creator" aria-label="Creator">
-                    ♔
-                  </span>
-                )}
-                <span>{m.name}</span>
-                {group.contentType === "Mentoring" && m.role && (
-                  <span
-                    className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${highlighted ? "bg-amber-500/30 text-amber-200" : "bg-slate-600/80 text-slate-200"}`}
-                  >
-                    {m.role}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-        {isLoggedIn && isMember && group.applicants.length > 0 && (
-          <div className="mt-3 rounded-xl bg-slate-900/60 p-3">
-            <p className={`text-[11px] font-semibold uppercase tracking-wide ${highlighted ? "text-amber-300/80" : "text-slate-400"}`}>
-              Applicants ({group.applicants.length})
-            </p>
-            <ul className={`mt-1 flex flex-col gap-1 text-xs ${highlighted ? "text-amber-100/80" : "text-slate-300"}`}>
-              {group.applicants.map((a) => (
-                <li key={a.discordId} className="flex items-center justify-between gap-2 flex-wrap">
-                  <span>{a.name}</span>
-                  {group.contentType === "Mentoring" && a.role && (
-                    <span
-                      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${highlighted ? "bg-amber-500/30 text-amber-200" : "bg-slate-600/80 text-slate-200"}`}
-                    >
-                      {a.role}
-                    </span>
-                  )}
-                  {isCreator && (
-                    <span className="flex gap-1">
-                  <button
-                        type="button"
-                        disabled={busy}
-                        onClick={async () => {
-                          setActingId(`${group.id}:accept:${a.discordId}`);
-                          try {
-                            const res = await fetch(`/api/groups/${group.id}/applications`, {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                applicantDiscordId: a.discordId,
-                                action: "accept"
-                              })
-                            });
-                            if (!res.ok) {
-                              const data = await res.json().catch(() => ({}));
-                              throw new Error(data.error || "Failed to accept applicant");
-                            }
-                            refresh();
-                          } catch (err: any) {
-                            setError(err.message ?? "Failed to accept applicant");
-                            refresh();
-                          } finally {
-                            setActingId(null);
-                          }
-                        }}
-                        className="rounded-lg bg-emerald-500 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-400 disabled:opacity-60"
-                      >
-                        Accept
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={async () => {
-                          setActingId(`${group.id}:decline:${a.discordId}`);
-                          try {
-                            const res = await fetch(`/api/groups/${group.id}/applications`, {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({
-                                applicantDiscordId: a.discordId,
-                                action: "decline"
-                              })
-                            });
-                            if (!res.ok) {
-                              const data = await res.json().catch(() => ({}));
-                              throw new Error(data.error || "Failed to decline applicant");
-                            }
-                            refresh();
-                          } catch (err: any) {
-                            setError(err.message ?? "Failed to decline applicant");
-                            refresh();
-                          } finally {
-                            setActingId(null);
-                          }
-                        }}
-                        className="rounded-lg bg-red-600/80 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-red-500 disabled:opacity-60"
-                      >
-                        Decline
-                      </button>
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <div className="mt-auto pt-3">
-          {isLoggedIn ? (
-            isCreator ? (
-              <div className="flex flex-col gap-2">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={async () => {
-                    setActingId(`${group.id}:availability`);
-                    try {
-                      const res = await fetch(`/api/groups/${group.id}/availability`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ available: !group.available })
-                      });
-                      if (!res.ok) {
-                        const data = await res.json().catch(() => ({}));
-                        throw new Error(data.error || "Failed to change availability");
-                      }
-                      refresh();
-                    } catch (err: any) {
-                      setError(err.message ?? "Failed to change availability");
-                      refresh();
-                    } finally {
-                      setActingId(null);
-                    }
-                  }}
-                  className={
-                    group.available
-                      ? "inline-flex w-full items-center justify-center rounded-xl bg-slate-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-slate-600 disabled:opacity-60"
-                      : "inline-flex w-full items-center justify-center rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-60"
-                  }
-                >
-                  {availabilityBusy ? "Toggling availability…" : group.available ? "Make unavailable" : "Make available"}
-                </button>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => handleDelete(group.id)}
-                  className="inline-flex w-full items-center justify-center rounded-xl bg-red-600/80 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500 disabled:opacity-60"
-                >
-                  {deleteBusy ? "Deleting…" : "Delete group"}
-                </button>
-              </div>
-            ) : isMember ? (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => handleLeave(group.id)}
-                className={
-                  highlighted
-                    ? "inline-flex w-full items-center justify-center rounded-xl border border-amber-400/60 bg-amber-900/40 px-3 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-800/50 disabled:opacity-60"
-                    : "inline-flex w-full items-center justify-center rounded-xl border border-slate-500 bg-slate-800/80 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-700 disabled:opacity-60"
-                }
-              >
-                {leaveBusy ? "Leaving…" : "Leave"}
-              </button>
-            ) : isInAnyGroup ? null : !showApplyActions ? (
-              <div className="text-xs text-slate-400">
-                Unavailable
-              </div>
-            ) : (
-              <button
-                type="button"
-                disabled={busy || !canApplyMore}
-                onClick={() => {
-                  if (group.contentType === "Mentoring" && !isApplicant) {
-                    setJoinModalRole("Guide");
-                    setJoinModalGroupId(group.id);
-                  } else {
-                    handleApply(group.id, isApplicant ? "withdraw" : "apply");
-                  }
-                }}
-                className={
-                  isApplicant
-                    ? "inline-flex w-full items-center justify-center rounded-xl bg-fuchsia-600 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-fuchsia-500/40 transition hover:bg-fuchsia-500 disabled:opacity-60"
-                    : "inline-flex w-full items-center justify-center rounded-xl bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-indigo-500/40 transition group-hover:bg-indigo-400 disabled:opacity-60"
-                }
-              >
-                {applyBusy
-                  ? isApplicant
-                    ? "Withdrawing…"
-                    : "Applying…"
-                  : isApplicant
-                    ? "Withdraw"
-                    : "Apply"}
-              </button>
-            )
-          ) : null}
-        </div>
-      </article>
-    );
-  };
 
   const joinModalGroup = joinModalGroupId ? groups.find((g) => g.id === joinModalGroupId) : null;
-  const onConfirmJoinWithRole = async () => {
-    if (!joinModalGroupId) return;
-    await handleApply(joinModalGroupId, "apply", joinModalRole);
-    setJoinModalGroupId(null);
+
+  const joinModalNeedsRole =
+    joinModalGroup &&
+    joinModalGroup.requireRoleSelection &&
+    (joinModalGroup.categoryLevel1 === "Mentoring" ||
+      joinModalGroup.categoryLevel1 === "PvM");
+
+  const joinModalNeedsRedline =
+    joinModalGroup?.categoryLevel1 === "PvM" && joinModalGroup.requireRedlinePoints;
+
+  const joinModalNeedsChain =
+    joinModalGroup?.categoryLevel1 === "PvM" && joinModalGroup.requireChainLinks;
+
+  const joinModalChainLinkMax = useMemo(
+    () =>
+      maxChainLinkSlotsForRedline(
+        joinModalNeedsRedline
+          ? parseNonNegativeWholeNumberString(joinModalRedlinePoints) ?? null
+          : null
+      ),
+    [joinModalNeedsRedline, joinModalRedlinePoints]
+  );
+
+  const applyModalRequirementsMet = useMemo(() => {
+    if (!joinModalGroup) return true;
+    if (joinModalNeedsRole) {
+      const rolePool: readonly string[] =
+        joinModalGroup.categoryLevel1 === "Mentoring" ? MENTORING_ROLES : PVM_APPLICANT_ROLES;
+      if (!rolePool.includes(joinModalRole)) {
+        return false;
+      }
+    }
+    const parsedRedline = joinModalNeedsRedline
+      ? parseNonNegativeWholeNumberString(joinModalRedlinePoints)
+      : null;
+    if (joinModalNeedsRedline && parsedRedline === undefined) {
+      return false;
+    }
+    if (joinModalNeedsChain) {
+      const chain = parseNonNegativeWholeNumberString(joinModalChainLinkSlots);
+      if (chain === undefined) return false;
+      if (
+        !isValidChainLinkSlotsValue(
+          chain,
+          joinModalNeedsRedline ? parsedRedline! : null
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }, [
+    joinModalGroup,
+    joinModalNeedsRole,
+    joinModalNeedsRedline,
+    joinModalNeedsChain,
+    joinModalRole,
+    joinModalRedlinePoints,
+    joinModalChainLinkSlots
+  ]);
+
+  const applyModalBlocked = !applyModalRequirementsMet;
+
+  const onConfirmApplyModal = async () => {
+    if (!joinModalGroupId || !joinModalGroup) return;
+    if (applyModalBlocked) return;
+    const role =
+      joinModalGroup.requireRoleSelection &&
+      (joinModalGroup.categoryLevel1 === "Mentoring" ||
+        joinModalGroup.categoryLevel1 === "PvM")
+        ? joinModalRole
+        : undefined;
+    const redlinePoints =
+      joinModalGroup.categoryLevel1 === "PvM" && joinModalGroup.requireRedlinePoints
+        ? parseNonNegativeWholeNumberString(joinModalRedlinePoints)
+        : undefined;
+    const chainLinkSlots =
+      joinModalGroup.categoryLevel1 === "PvM" && joinModalGroup.requireChainLinks
+        ? parseNonNegativeWholeNumberString(joinModalChainLinkSlots)
+        : undefined;
+    const ok = await handleApply(joinModalGroupId, "apply", {
+      role,
+      ...(redlinePoints !== undefined ? { redlinePoints } : {}),
+      ...(chainLinkSlots !== undefined ? { chainLinkSlots } : {})
+    });
+    if (ok) setJoinModalGroupId(null);
+  };
+
+  const groupCardSharedProps = {
+    discordId,
+    groups,
+    now,
+    isLoggedIn,
+    actingId,
+    setActingId,
+    autoDeletingId,
+    setError,
+    refresh,
+    onOpenApplyPrep: (group: Group) => {
+      setError(null);
+      setJoinModalRole("");
+      setJoinModalRedlinePoints("");
+      setJoinModalChainLinkSlots("");
+      setJoinModalGroupId(group.id);
+    },
+    handleApply,
+    handleLeave,
+    handleDelete
   };
 
   return (
@@ -561,10 +324,27 @@ export default function HomePage() {
           <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-amber-400/90">
             Your group
           </h3>
-          <div className="flex justify-center">
-            <div className="w-full max-w-md">
-              {renderGroupCard(myGroup, true)}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-stretch">
+            <div
+              className={`min-h-0 min-w-0 md:h-full ${YOUR_GROUP_PANEL_MAX} overflow-x-hidden overflow-y-auto overscroll-y-contain`}
+            >
+              <GroupCard
+                group={myGroup}
+                highlighted
+                {...groupCardSharedProps}
+              />
             </div>
+            {discordId && (
+              <div
+                className={`flex min-h-0 min-w-0 flex-col overflow-hidden md:h-full ${YOUR_GROUP_PANEL_MAX}`}
+              >
+                <GroupChatWidget
+                  groupId={myGroup.id}
+                  discordId={discordId}
+                  className="min-h-0 flex-1"
+                />
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -578,33 +358,36 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
               <span className="font-semibold">Filter:</span>
               <select
-                value={filterContentType}
+                value={filterCategoryLevel1}
                 onChange={(e) => {
-                  const value = e.target.value as ContentType | "All";
-                  setFilterContentType(value);
-                  setFilterSubType("All");
-                  setFilterTertiary("All");
+                  const value = e.target.value as CategoryLevel1 | "All";
+                  setFilterCategoryLevel1(value);
+                  setFilterCategoryLevel2("All");
+                  setFilterCategoryLevel3("All");
                 }}
                 className="rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-xs outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
               >
-                <option value="All">All categories</option>
+                <option value="All">All</option>
                 <option value="PvM">PvM</option>
                 <option value="PvP">PvP</option>
+                <option value="Quests">Quests</option>
                 <option value="Mentoring">Mentoring</option>
                 <option value="Roleplay">Roleplay</option>
                 <option value="Custom">Custom</option>
               </select>
-              {(filterContentType === "PvM" || filterContentType === "PvP") && (
+              {(filterCategoryLevel1 === "PvM" ||
+                filterCategoryLevel1 === "PvP" ||
+                filterCategoryLevel1 === "Quests") && (
                 <select
-                  value={filterSubType}
+                  value={filterCategoryLevel2}
                   onChange={(e) => {
-                    const value = e.target.value as string | "All";
-                    setFilterSubType(value);
-                    setFilterTertiary("All");
+                    const value = e.target.value as CategoryLevel2 | "All";
+                    setFilterCategoryLevel2(value);
+                    setFilterCategoryLevel3("All");
                   }}
                   className="rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-xs outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
                 >
-                  <option value="All">All types</option>
+                  <option value="All">All</option>
                   {availableSubTypes.map((sub) => (
                     <option key={sub} value={sub}>
                       {sub}
@@ -614,11 +397,11 @@ export default function HomePage() {
               )}
               {availableTertiaryOptions.length > 0 && (
                 <select
-                  value={filterTertiary}
-                  onChange={(e) => setFilterTertiary(e.target.value as string | "All")}
+                  value={filterCategoryLevel3}
+                  onChange={(e) => setFilterCategoryLevel3(e.target.value as CategoryLevel3 | "All")}
                   className="rounded-lg border border-white/10 bg-slate-900/70 px-2 py-1 text-xs outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
                 >
-                  <option value="All">All sub-types</option>
+                  <option value="All">All</option>
                   {availableTertiaryOptions.map((opt) => (
                     <option key={opt} value={opt}>
                       {opt}
@@ -630,7 +413,7 @@ export default function HomePage() {
           </div>
           {isLoggedIn && !myGroup && (
             <Link
-              href="/groups/new"
+              href="/creategroup"
               className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-white shadow shadow-emerald-500/40 transition hover:bg-emerald-400"
             >
               <span className="text-base leading-none">＋</span>
@@ -652,7 +435,14 @@ export default function HomePage() {
               </div>
             ) : (
               <div className="grid gap-4 md:grid-cols-3">
-                {availableGroups.map((g) => renderGroupCard(g, false))}
+                {availableGroups.map((g) => (
+                  <GroupCard
+                    key={g.id}
+                    group={g}
+                    highlighted={false}
+                    {...groupCardSharedProps}
+                  />
+                ))}
               </div>
             )}
           </>
@@ -660,51 +450,33 @@ export default function HomePage() {
       </section>
     </div>
 
-    {joinModalGroupId && joinModalGroup && (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-        onClick={() => setJoinModalGroupId(null)}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="join-modal-title"
-      >
-        <div
-          className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-xl"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <h3 id="join-modal-title" className="text-sm font-semibold uppercase tracking-wide text-slate-200">
-            Join as…
-          </h3>
-          <div className="mt-4">
-            <select
-              value={joinModalRole}
-              onChange={(e) => setJoinModalRole(e.target.value)}
-              className="w-full rounded-xl border border-white/10 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40"
-            >
-              <option value="Guide">Guide</option>
-              <option value="Student">Student</option>
-            </select>
-          </div>
-          <div className="mt-5 flex gap-3">
-            <button
-              type="button"
-              disabled={actingId === joinModalGroupId}
-              onClick={onConfirmJoinWithRole}
-              className="flex-1 rounded-xl bg-indigo-500 px-3 py-2 text-sm font-semibold text-white shadow shadow-indigo-500/40 transition hover:bg-indigo-400 disabled:opacity-60"
-            >
-              {actingId === joinModalGroupId ? "Applying…" : "Apply"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setJoinModalGroupId(null)}
-              className="flex-1 rounded-xl border border-slate-500 bg-slate-800 px-3 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-700"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
+    <AdditionalInputRequiredModal
+      open={Boolean(joinModalGroupId && joinModalGroup)}
+      onClose={() => setJoinModalGroupId(null)}
+      onConfirm={onConfirmApplyModal}
+      confirmDisabled={
+        joinModalGroupId ? actingId === `${joinModalGroupId}:apply` || applyModalBlocked : false
+      }
+      confirmBusy={Boolean(joinModalGroupId && actingId === `${joinModalGroupId}:apply`)}
+      disableBack={false}
+      needsRole={Boolean(joinModalNeedsRole)}
+      roleOptions={
+        joinModalGroup
+          ? joinModalGroup.categoryLevel1 === "Mentoring"
+            ? MENTORING_ROLES
+            : PVM_APPLICANT_ROLES
+          : []
+      }
+      roleValue={joinModalRole}
+      onRoleChange={setJoinModalRole}
+      needsRedlinePoints={Boolean(joinModalNeedsRedline)}
+      needsChainLinkSlots={Boolean(joinModalNeedsChain)}
+      chainLinkSlotsMax={joinModalChainLinkMax}
+      redlinePointsValue={joinModalRedlinePoints}
+      chainLinkSlotsValue={joinModalChainLinkSlots}
+      onRedlinePointsChange={setJoinModalRedlinePoints}
+      onChainLinkSlotsChange={setJoinModalChainLinkSlots}
+    />
     </>
   );
 }

@@ -13,6 +13,7 @@
     "db:status:prod": "dotenv -e .env.production -- prisma migrate status"
   },
   "dependencies": {
+    "@iconify/react": "^6.0.2",
     "@prisma/client": "^6.19.2",
     "next": "^16.1.6",
     "next-auth": "^4.24.13",
@@ -22,11 +23,11 @@
     "react-dom": "18.2.0"
   },
   "devDependencies": {
-    "dotenv-cli": "^7.4.2",
     "@types/node": "20.11.19",
     "@types/react": "18.2.57",
     "@types/react-dom": "18.2.19",
     "autoprefixer": "10.4.17",
+    "dotenv-cli": "^7.4.2",
     "eslint": "8.57.0",
     "postcss": "8.4.35",
     "prisma": "^6.19.2",
